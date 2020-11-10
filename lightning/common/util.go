@@ -264,6 +264,20 @@ func WriteMySQLIdentifier(builder *strings.Builder, identifier string) {
 	builder.WriteByte('`')
 }
 
+func EscapeMySQLSingleQuote(builder *strings.Builder, s string) {
+	builder.Grow(len(s) + 2)
+	builder.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b == '\'' {
+			builder.WriteString("''")
+		} else {
+			builder.WriteByte(b)
+		}
+	}
+	builder.WriteByte('\'')
+}
+
 // GetJSON fetches a page and parses it as JSON. The parsed result will be
 // stored into the `v`. The variable `v` must be a pointer to a type that can be
 // unmarshalled from JSON.

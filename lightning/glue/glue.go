@@ -16,6 +16,7 @@ package glue
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/model"
@@ -32,6 +33,7 @@ type Glue interface {
 	GetSQLExecutor() SQLExecutor
 	GetParser() *parser.Parser
 	GetTables(context.Context, string) ([]*model.TableInfo, error)
+	GetSession() checkpoints.Session
 	OpenCheckpointsDB(context.Context, *config.Config) (checkpoints.CheckpointsDB, error)
 	Record(string, uint64)
 }
@@ -84,7 +86,11 @@ func (e ExternalTiDBGlue) GetDB() *sql.DB {
 }
 
 func (e ExternalTiDBGlue) GetTables(context.Context, string) ([]*model.TableInfo, error) {
-	return nil, nil
+	return nil, errors.New("ExternalTiDBGlue doesn't have a valid GetTables function, should use FetchRemoteTableModels")
+}
+
+func (e ExternalTiDBGlue) GetSession() checkpoints.Session {
+	return nil
 }
 
 func (e ExternalTiDBGlue) OpenCheckpointsDB(ctx context.Context, cfg *config.Config) (checkpoints.CheckpointsDB, error) {
