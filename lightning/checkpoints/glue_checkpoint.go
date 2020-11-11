@@ -28,8 +28,6 @@ import (
 	"github.com/pingcap/tidb-lightning/lightning/log"
 	"github.com/pingcap/tidb-lightning/lightning/mydump"
 	verify "github.com/pingcap/tidb-lightning/lightning/verification"
-	"github.com/pingcap/tidb/session"
-	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/sqlexec"
@@ -42,6 +40,8 @@ const (
 )
 
 type Session interface {
+	Copy() (Session, error)
+	Close() error
 	Execute(context.Context, string) ([]sqlexec.RecordSet, error)
 	CommitTxn(context.Context) error
 	RollbackTxn(context.Context)
@@ -660,14 +660,18 @@ func (g GlueCheckpointsDB) DumpChunks(ctx context.Context, csv io.Writer) error 
 }
 
 func Transact(ctx context.Context, purpose string, se Session, parentLogger log.Logger, action func(context.Context, Session) error) error {
-	sctx, ok := se.(sessionctx.Context)
-	if !ok {
-		return errors.New("can't recover sessionctx.Context from glue")
-	}
-	s, err := session.CreateSession(sctx.GetStore())
+	s, err := se.Copy()
 	if err != nil {
-		return errors.Annotate(err, "create new session in GlueCheckpointsDB")
+		return errors.Annotate(err, "can't get a new session to perform Transact")
 	}
+	//sctx, ok := se.(sessionctx.Context)
+	//if !ok {
+	//	return errors.New("can't recover sessionctx.Context from glue")
+	//}
+	//s, err := session.CreateSession(sctx.GetStore())
+	//if err != nil {
+	//	return errors.Annotate(err, "create new session in GlueCheckpointsDB")
+	//}
 	defer s.Close()
 
 	return retry(purpose, parentLogger, func() error {
