@@ -296,11 +296,17 @@ outside:
 }
 
 func (rc *RestoreController) restoreSchema(ctx context.Context) error {
-	tidbMgr, err := NewTiDBManager(rc.cfg.TiDB, rc.tls)
+	var (
+		tidbMgr *TiDBManager
+		err     error
+	)
+	if rc.tidbGlue.OwnsSQLExecutor() {
+		tidbMgr, err = NewTiDBManager(rc.cfg.TiDB, rc.tls)
+		defer tidbMgr.Close()
+	}
 	if err != nil {
 		return errors.Trace(err)
 	}
-	defer tidbMgr.Close()
 
 	if !rc.cfg.Mydumper.NoSchema {
 		if rc.tidbGlue.OwnsSQLExecutor() {
