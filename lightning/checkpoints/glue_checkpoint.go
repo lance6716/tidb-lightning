@@ -40,7 +40,6 @@ const (
 )
 
 type Session interface {
-	Copy() (Session, error)
 	Close() error
 	Execute(context.Context, string) ([]sqlexec.RecordSet, error)
 	CommitTxn(context.Context) error
@@ -51,12 +50,12 @@ type Session interface {
 }
 
 type GlueCheckpointsDB struct {
-	se     Session
-	schema string
-	taskID int64
+	getSessionFunc func() Session
+	schema         string
+	taskID         int64
 }
 
-func NewGlueCheckpointsDB(ctx context.Context, se Session, schemaName string, taskID int64) (*GlueCheckpointsDB, error) {
+func NewGlueCheckpointsDB(ctx context.Context, se Session, f func() Session, schemaName string, taskID int64) (*GlueCheckpointsDB, error) {
 	var escapedSchemaName strings.Builder
 	common.WriteMySQLIdentifier(&escapedSchemaName, schemaName)
 	schema := escapedSchemaName.String()
@@ -108,15 +107,18 @@ func NewGlueCheckpointsDB(ctx context.Context, se Session, schemaName string, ta
 	}
 
 	return &GlueCheckpointsDB{
-		se:     se,
-		schema: schema,
-		taskID: taskID,
+		getSessionFunc: f,
+		schema:         schema,
+		taskID:         taskID,
 	}, nil
 }
 
 func (g GlueCheckpointsDB) Initialize(ctx context.Context, cfg *config.Config, dbInfo map[string]*TidbDBInfo) error {
 	logger := log.L()
-	err := Transact(ctx, "insert checkpoints", g.se, logger, func(c context.Context, s Session) error {
+	se := g.getSessionFunc()
+	defer se.Close()
+
+	err := Transact(ctx, "insert checkpoints", se, logger, func(c context.Context, s Session) error {
 		stmtID, _, _, err := s.PrepareStmt(fmt.Sprintf(InitTaskTemplate, g.schema, CheckpointTableNameTask))
 		if err != nil {
 			return errors.Trace(err)
@@ -170,10 +172,12 @@ func (g GlueCheckpointsDB) TaskCheckpoint(ctx context.Context) (*TaskCheckpoint,
 	logger := log.L()
 	sql := fmt.Sprintf(ReadTaskTemplate, g.schema, CheckpointTableNameTask)
 	purpose := "fetch task checkpoint"
+	se := g.getSessionFunc()
+	defer se.Close()
 
 	var taskCp *TaskCheckpoint
 	err := retry(purpose, logger, func() error {
-		rs, err := g.se.Execute(ctx, sql)
+		rs, err := se.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -212,10 +216,13 @@ func (g GlueCheckpointsDB) Get(ctx context.Context, tableName string) (*TableChe
 		Engines: map[int32]*EngineCheckpoint{},
 	}
 	logger := log.With(zap.String("table", tableName))
-	err := Transact(ctx, "read checkpoint", g.se, logger, func(c context.Context, s Session) error {
+	se := g.getSessionFunc()
+	defer se.Close()
+
+	err := Transact(ctx, "read checkpoint", se, logger, func(c context.Context, s Session) error {
 		// 1. Populate the engines.
 		sql := fmt.Sprintf(ReadEngineTemplate, g.schema, CheckpointTableNameEngine)
-		rs, err := g.se.Execute(ctx, sql)
+		rs, err := s.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -244,7 +251,7 @@ func (g GlueCheckpointsDB) Get(ctx context.Context, tableName string) (*TableChe
 
 		// 2. Populate the chunks.
 		sql = fmt.Sprintf(ReadChunkTemplate, g.schema, CheckpointTableNameChunk)
-		rs, err = g.se.Execute(ctx, sql)
+		rs, err = s.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -292,7 +299,7 @@ func (g GlueCheckpointsDB) Get(ctx context.Context, tableName string) (*TableChe
 
 		// 3. Fill in the remaining table info
 		sql = fmt.Sprintf(ReadTableRemainTemplate, g.schema, CheckpointTableNameTable)
-		rs, err = g.se.Execute(ctx, sql)
+		rs, err = s.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -327,7 +334,10 @@ func (g GlueCheckpointsDB) Close() error {
 
 func (g GlueCheckpointsDB) InsertEngineCheckpoints(ctx context.Context, tableName string, checkpointMap map[int32]*EngineCheckpoint) error {
 	logger := log.With(zap.String("table", tableName))
-	err := Transact(ctx, "update engine checkpoints", g.se, logger, func(c context.Context, s Session) error {
+	se := g.getSessionFunc()
+	defer se.Close()
+
+	err := Transact(ctx, "update engine checkpoints", se, logger, func(c context.Context, s Session) error {
 		engineStmt, _, _, err := s.PrepareStmt(fmt.Sprintf(ReplaceEngineTemplate, g.schema, CheckpointTableNameEngine))
 		if err != nil {
 			return errors.Trace(err)
@@ -385,11 +395,14 @@ func (g GlueCheckpointsDB) InsertEngineCheckpoints(ctx context.Context, tableNam
 
 func (g GlueCheckpointsDB) Update(checkpointDiffs map[string]*TableCheckpointDiff) {
 	logger := log.L()
+	se := g.getSessionFunc()
+	defer se.Close()
+
 	chunkQuery := fmt.Sprintf(UpdateChunkTemplate, g.schema, CheckpointTableNameChunk)
 	rebaseQuery := fmt.Sprintf(UpdateTableRebaseTemplate, g.schema, CheckpointTableNameTable)
 	tableStatusQuery := fmt.Sprintf(UpdateTableStatusTemplate, g.schema, CheckpointTableNameTable)
 	engineStatusQuery := fmt.Sprintf(UpdateEngineTemplate, g.schema, CheckpointTableNameEngine)
-	err := Transact(context.Background(), "update checkpoints", g.se, logger, func(c context.Context, s Session) error {
+	err := Transact(context.Background(), "update checkpoints", se, logger, func(c context.Context, s Session) error {
 		chunkStmt, _, _, err := s.PrepareStmt(chunkQuery)
 		if err != nil {
 			return errors.Trace(err)
@@ -473,9 +486,12 @@ func (g GlueCheckpointsDB) Update(checkpointDiffs map[string]*TableCheckpointDif
 
 func (g GlueCheckpointsDB) RemoveCheckpoint(ctx context.Context, tableName string) error {
 	logger := log.With(zap.String("table", tableName))
+	se := g.getSessionFunc()
+	defer se.Close()
+
 	if tableName == "all" {
 		return retry("remove all checkpoints", logger, func() error {
-			_, err := g.se.Execute(ctx, "DROP SCHEMA "+g.schema)
+			_, err := se.Execute(ctx, "DROP SCHEMA "+g.schema)
 			return err
 		})
 	}
@@ -489,7 +505,7 @@ func (g GlueCheckpointsDB) RemoveCheckpoint(ctx context.Context, tableName strin
 	deleteTableQuery := fmt.Sprintf(DeleteTableTemplate, g.schema, CheckpointTableNameTable)
 	deleteTableQuery = strings.ReplaceAll(deleteTableQuery, "?", tableName)
 
-	return errors.Trace(Transact(ctx, "remove checkpoints", g.se, logger, func(c context.Context, s Session) error {
+	return errors.Trace(Transact(ctx, "remove checkpoints", se, logger, func(c context.Context, s Session) error {
 		if _, e := s.Execute(c, deleteChunkQuery); e != nil {
 			return e
 		}
@@ -506,8 +522,11 @@ func (g GlueCheckpointsDB) RemoveCheckpoint(ctx context.Context, tableName strin
 func (g GlueCheckpointsDB) MoveCheckpoints(ctx context.Context, taskID int64) error {
 	newSchema := fmt.Sprintf("`%s.%d.bak`", g.schema[1:len(g.schema)-1], taskID)
 	logger := log.With(zap.Int64("taskID", taskID))
+	se := g.getSessionFunc()
+	defer se.Close()
+
 	err := retry("create backup checkpoints schema", logger, func() error {
-		_, err := g.se.Execute(ctx, "CREATE SCHEMA IF NOT EXISTS "+newSchema)
+		_, err := se.Execute(ctx, "CREATE SCHEMA IF NOT EXISTS "+newSchema)
 		return err
 	})
 	if err != nil {
@@ -517,7 +536,7 @@ func (g GlueCheckpointsDB) MoveCheckpoints(ctx context.Context, taskID int64) er
 		CheckpointTableNameTable, CheckpointTableNameTask} {
 		query := fmt.Sprintf("RENAME TABLE %[1]s.%[3]s TO %[2]s.%[3]s", g.schema, newSchema, tbl)
 		err := retry(fmt.Sprintf("move %s checkpoints table", tbl), logger, func() error {
-			_, err := g.se.Execute(ctx, query)
+			_, err := se.Execute(ctx, query)
 			return err
 		})
 		if err != nil {
@@ -529,6 +548,8 @@ func (g GlueCheckpointsDB) MoveCheckpoints(ctx context.Context, taskID int64) er
 
 func (g GlueCheckpointsDB) IgnoreErrorCheckpoint(ctx context.Context, tableName string) error {
 	logger := log.With(zap.String("table", tableName))
+	se := g.getSessionFunc()
+	defer se.Close()
 
 	var colName string
 	if tableName == "all" {
@@ -549,7 +570,7 @@ func (g GlueCheckpointsDB) IgnoreErrorCheckpoint(ctx context.Context, tableName 
 	tableQuery := fmt.Sprintf(`
 		UPDATE %s.%s SET status = %d WHERE %s = %s AND status <= %d;
 	`, g.schema, CheckpointTableNameTable, CheckpointStatusLoaded, colName, tableName, CheckpointStatusMaxInvalid)
-	return errors.Trace(Transact(ctx, "ignore error checkpoints", g.se, logger, func(c context.Context, s Session) error {
+	return errors.Trace(Transact(ctx, "ignore error checkpoints", se, logger, func(c context.Context, s Session) error {
 		if _, e := s.Execute(c, engineQuery); e != nil {
 			return e
 		}
@@ -562,6 +583,8 @@ func (g GlueCheckpointsDB) IgnoreErrorCheckpoint(ctx context.Context, tableName 
 
 func (g GlueCheckpointsDB) DestroyErrorCheckpoint(ctx context.Context, tableName string) ([]DestroyedTableCheckpoint, error) {
 	logger := log.With(zap.String("table", tableName))
+	se := g.getSessionFunc()
+	defer se.Close()
 
 	var colName, aliasedColName string
 
@@ -600,7 +623,7 @@ func (g GlueCheckpointsDB) DestroyErrorCheckpoint(ctx context.Context, tableName
 	`, g.schema, CheckpointTableNameTable, colName, tableName, CheckpointStatusMaxInvalid)
 
 	var targetTables []DestroyedTableCheckpoint
-	err := Transact(ctx, "destroy error checkpoints", g.se, logger, func(c context.Context, s Session) error {
+	err := Transact(ctx, "destroy error checkpoints", se, logger, func(c context.Context, s Session) error {
 		targetTables = nil
 		rs, err := s.Execute(c, selectQuery)
 		if err != nil {
@@ -659,23 +682,9 @@ func (g GlueCheckpointsDB) DumpChunks(ctx context.Context, csv io.Writer) error 
 	return errors.Errorf("dumping glue checkpoint into CSV not unsupported")
 }
 
-func Transact(ctx context.Context, purpose string, se Session, parentLogger log.Logger, action func(context.Context, Session) error) error {
-	s, err := se.Copy()
-	if err != nil {
-		return errors.Annotate(err, "can't get a new session to perform Transact")
-	}
-	//sctx, ok := se.(sessionctx.Context)
-	//if !ok {
-	//	return errors.New("can't recover sessionctx.Context from glue")
-	//}
-	//s, err := session.CreateSession(sctx.GetStore())
-	//if err != nil {
-	//	return errors.Annotate(err, "create new session in GlueCheckpointsDB")
-	//}
-	defer s.Close()
-
+func Transact(ctx context.Context, purpose string, s Session, parentLogger log.Logger, action func(context.Context, Session) error) error {
 	return retry(purpose, parentLogger, func() error {
-		_, err = s.Execute(ctx, "BEGIN")
+		_, err := s.Execute(ctx, "BEGIN")
 		if err != nil {
 			return errors.Annotate(err, "begin transaction failed")
 		}
