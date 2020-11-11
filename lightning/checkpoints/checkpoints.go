@@ -136,7 +136,7 @@ const (
 				THEN VALUES(task_id)
 			END;`
 	ReadTaskTemplate = `
-		"SELECT task_id, source_dir, backend, importer_addr, tidb_host, tidb_port, pd_addr, sorted_kv_dir, lightning_ver FROM %s.%s WHERE id = 1"`
+		SELECT task_id, source_dir, backend, importer_addr, tidb_host, tidb_port, pd_addr, sorted_kv_dir, lightning_ver FROM %s.%s WHERE id = 1`
 	ReadEngineTemplate = `
 		SELECT engine_id, status FROM %s.%s WHERE table_name = ? ORDER BY engine_id DESC;`
 	ReadChunkTemplate = `
