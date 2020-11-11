@@ -219,9 +219,13 @@ func (g GlueCheckpointsDB) Get(ctx context.Context, tableName string) (*TableChe
 	se := g.getSessionFunc()
 	defer se.Close()
 
+	var tableNameBuilder strings.Builder
+	common.EscapeMySQLSingleQuote(&tableNameBuilder, tableName)
+	tableName = tableNameBuilder.String()
 	err := Transact(ctx, "read checkpoint", se, logger, func(c context.Context, s Session) error {
 		// 1. Populate the engines.
 		sql := fmt.Sprintf(ReadEngineTemplate, g.schema, CheckpointTableNameEngine)
+		sql = strings.ReplaceAll(sql, "?", tableName)
 		rs, err := s.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
@@ -251,6 +255,7 @@ func (g GlueCheckpointsDB) Get(ctx context.Context, tableName string) (*TableChe
 
 		// 2. Populate the chunks.
 		sql = fmt.Sprintf(ReadChunkTemplate, g.schema, CheckpointTableNameChunk)
+		sql = strings.ReplaceAll(sql, "?", tableName)
 		rs, err = s.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
@@ -299,6 +304,7 @@ func (g GlueCheckpointsDB) Get(ctx context.Context, tableName string) (*TableChe
 
 		// 3. Fill in the remaining table info
 		sql = fmt.Sprintf(ReadTableRemainTemplate, g.schema, CheckpointTableNameTable)
+		sql = strings.ReplaceAll(sql, "?", tableName)
 		rs, err = s.Execute(ctx, sql)
 		if err != nil {
 			return errors.Trace(err)
