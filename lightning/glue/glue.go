@@ -33,7 +33,7 @@ type Glue interface {
 	GetSQLExecutor() SQLExecutor
 	GetParser() *parser.Parser
 	GetTables(context.Context, string) ([]*model.TableInfo, error)
-	GetSession() checkpoints.Session
+	GetSession() (checkpoints.Session, error)
 	OpenCheckpointsDB(context.Context, *config.Config) (checkpoints.CheckpointsDB, error)
 	Record(string, uint64)
 }
@@ -89,8 +89,8 @@ func (e ExternalTiDBGlue) GetTables(context.Context, string) ([]*model.TableInfo
 	return nil, errors.New("ExternalTiDBGlue doesn't have a valid GetTables function, should use FetchRemoteTableModels")
 }
 
-func (e ExternalTiDBGlue) GetSession() checkpoints.Session {
-	return nil
+func (e ExternalTiDBGlue) GetSession() (checkpoints.Session, error) {
+	return nil, errors.New("ExternalTiDBGlue doesn't have a valid GetSession function")
 }
 
 func (e ExternalTiDBGlue) OpenCheckpointsDB(ctx context.Context, cfg *config.Config) (checkpoints.CheckpointsDB, error) {
