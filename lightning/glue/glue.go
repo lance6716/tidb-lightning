@@ -16,6 +16,7 @@ package glue
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/model"
@@ -32,13 +33,14 @@ type Glue interface {
 	GetSQLExecutor() SQLExecutor
 	GetParser() *parser.Parser
 	GetTables(context.Context, string) ([]*model.TableInfo, error)
+	GetSession() (checkpoints.Session, error)
 	OpenCheckpointsDB(context.Context, *config.Config) (checkpoints.CheckpointsDB, error)
 	Record(string, uint64)
 }
 
 type SQLExecutor interface {
 	ExecuteWithLog(ctx context.Context, query string, purpose string, logger *zap.Logger) error
-	ObtainStringLog(ctx context.Context, query string, purpose string, logger *zap.Logger) (string, error)
+	ObtainStringWithLog(ctx context.Context, query string, purpose string, logger *zap.Logger) (string, error)
 	Close()
 }
 
@@ -66,7 +68,7 @@ func (e ExternalTiDBGlue) ExecuteWithLog(ctx context.Context, query string, purp
 	return sql.Exec(ctx, purpose, query)
 }
 
-func (e ExternalTiDBGlue) ObtainStringLog(ctx context.Context, query string, purpose string, logger *zap.Logger) (string, error) {
+func (e ExternalTiDBGlue) ObtainStringWithLog(ctx context.Context, query string, purpose string, logger *zap.Logger) (string, error) {
 	var s string
 	err := common.SQLWithRetry{
 		DB:     e.db,
@@ -84,7 +86,11 @@ func (e ExternalTiDBGlue) GetDB() *sql.DB {
 }
 
 func (e ExternalTiDBGlue) GetTables(context.Context, string) ([]*model.TableInfo, error) {
-	return nil, nil
+	return nil, errors.New("ExternalTiDBGlue doesn't have a valid GetTables function, should use FetchRemoteTableModels")
+}
+
+func (e ExternalTiDBGlue) GetSession() (checkpoints.Session, error) {
+	return nil, errors.New("ExternalTiDBGlue doesn't have a valid GetSession function")
 }
 
 func (e ExternalTiDBGlue) OpenCheckpointsDB(ctx context.Context, cfg *config.Config) (checkpoints.CheckpointsDB, error) {

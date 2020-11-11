@@ -107,6 +107,11 @@ type SQLWithRetry struct {
 }
 
 func (t SQLWithRetry) perform(ctx context.Context, parentLogger log.Logger, purpose string, action func() error) error {
+	return Retry(purpose, parentLogger.Logger, action)
+}
+
+// Retry is sharded by SQLWithRetry.perform and implementation of GlueCheckpointsDB in TiDB
+func Retry(purpose string, parentLogger *zap.Logger, action func() error) error {
 	var err error
 outside:
 	for i := 0; i < defaultMaxRetry; i++ {
@@ -118,6 +123,7 @@ outside:
 		}
 
 		err = action()
+
 		switch {
 		case err == nil:
 			return nil
@@ -128,7 +134,6 @@ outside:
 			break outside
 		}
 	}
-
 	return errors.Annotatef(err, "%s failed", purpose)
 }
 
@@ -262,6 +267,20 @@ func WriteMySQLIdentifier(builder *strings.Builder, identifier string) {
 	}
 
 	builder.WriteByte('`')
+}
+
+func EscapeMySQLSingleQuote(builder *strings.Builder, s string) {
+	builder.Grow(len(s) + 2)
+	builder.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b == '\'' {
+			builder.WriteString("''")
+		} else {
+			builder.WriteByte(b)
+		}
+	}
+	builder.WriteByte('\'')
 }
 
 // GetJSON fetches a page and parses it as JSON. The parsed result will be
