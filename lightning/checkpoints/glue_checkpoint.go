@@ -40,7 +40,7 @@ const (
 )
 
 type Session interface {
-	Close() error
+	Close()
 	Execute(context.Context, string) ([]sqlexec.RecordSet, error)
 	CommitTxn(context.Context) error
 	RollbackTxn(context.Context)
@@ -52,7 +52,7 @@ type Session interface {
 type GlueCheckpointsDB struct {
 	getSessionFunc func() Session
 	schema         string
-	taskID         int64
+	taskID         int64 // TODO(lance6716): check different meaning from taskID by timestamp
 }
 
 func NewGlueCheckpointsDB(ctx context.Context, se Session, f func() Session, schemaName string, taskID int64) (*GlueCheckpointsDB, error) {
